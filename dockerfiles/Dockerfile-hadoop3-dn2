@@ -1,0 +1,38 @@
+##############################
+## Dockerfile-hadoop-dn2
+##############################
+
+FROM hadoop3-nn
+
+# directories to be removed since we are not on a master node
+# but they will be created since we inherit from the NN
+
+# ENV HADOOP_NAMENODE_DIR /data/hadoop_store/hdfs/namenode
+
+ENV HADOOP_HOME /opt/hadoop
+ENV HADOOP_DATANODE_DIR /data/hadoop_store/hdfs/datanode2
+ENV HADOOP_USER_HOME /home/hadoop
+
+## Remove the unwanted files
+
+# RUN [ -d "$HADOOP_NAMENODE_DIR" ] \
+#    && rm -fr "$HADOOP_NAMENODE_DIR" \
+#    || true
+
+## Set the proper rights
+
+# RUN [ ! -d "$HADOOP_DATANODE_DIR" ] \
+#    && mkdir -p "$HADOOP_DATANODE_DIR"
+
+# RUN chmod -R 777 "$HADOOP_DATANODE_DIR" \
+#    && chown -R hadoop:hadoop "$HADOOP_DATANODE_DIR" \
+#    || true
+
+## Configure the node
+
+COPY config/dn2/* $HADOOP_HOME/etc/hadoop/
+RUN chown -R hadoop:hadoop $HADOOP_HOME/etc/hadoop
+
+# We don't want hadoop to be started automatically
+CMD ["sh","-c","/etc/init.d/ssh restart ; /bin/bash"]
+

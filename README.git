@@ -1,0 +1,16 @@
+Configuration
+=============
+
+$ git config --global user.email "klaregis@gmail.com"
+$ git config --global user.name "rejux"
+
+From Github
+===========
+
+echo "# docker_hadoop_cluster_light" >> README.md
+git init
+git add README.md
+git commit -m "first commit"
+git remote add origin https://github.com/rejux/docker_hadoop_cluster_light.git
+git push -u origin master
+

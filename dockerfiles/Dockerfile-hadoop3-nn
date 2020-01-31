@@ -1,0 +1,259 @@
+#############################
+## Dockerfile-hadoop3-nn
+#############################
+
+FROM rkl-cdes/vim-dev-lab
+
+ENV HADOOP_VERSION 3.2.1
+ENV SPARK_VERSION 3.0.0-preview-bin-hadoop3.2
+
+ENV HADOOP_HOME /opt/hadoop
+ENV SPARK_HOME /opt/spark
+
+ENV HADOOP_NAMENODE_DIR /data/hadoop_store/hdfs/namenode
+ENV HADOOP_LOG_DIR /var/log/hadoop
+ENV SPARK_LOG_DIR /var/log/spark
+
+ENV JAVA_HOME /usr/lib/jvm/java-8-openjdk-amd64
+
+########################
+# update and install
+########################
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ssh \
+        rsync \
+        vim \
+        net-tools \
+        inetutils-ping \
+        telnet \
+        openjdk-8-jdk \
+        openjdk-8-jre \
+        libxml2-dev \
+        libkrb5-dev \
+        libffi-dev \
+        libssl-dev \
+        libldap2-dev \
+        python-lxml \
+        libxslt1-dev \
+        libgmp3-dev \
+        libsasl2-dev \
+        libsqlite3-dev \
+        libmysqlclient-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN ln -sf /usr/bin/python3.7 /usr/bin/python
+RUN ln -ff /usr/bin/pip3 /usr/bin/pip
+
+#################
+# hadoop user
+#################
+
+ENV UID 1001
+ENV GID 1001
+ENV UNAME hadoop
+ENV GNAME hadoop
+ENV SHELL="/bin/bash"
+ENV UHOME="/home/hadoop"
+
+RUN apt-get install -y --no-install-recommends \
+    sudo \
+    # Create HOME dir
+    && mkdir -p "${UHOME}" \
+    && chown "${UID}":"${GID}" "${UHOME}" \
+    # Create user
+    && echo "${UNAME}:x:${UID}:${GID}:${UNAME},,,:${UHOME}:${SHELL}" >> /etc/passwd \
+    && echo "${UNAME}::17032:0:99999:7:::" >> /etc/shadow \
+    # No password sudo
+    && echo "${UNAME} ALL=(ALL) NOPASSWD: ALL" > "/etc/sudoers.d/${UNAME}" \
+    && chmod 0440 "/etc/sudoers.d/${UNAME}" \
+    # Create group
+    && echo "${GNAME}:x:${GID}:${UNAME}" >> /etc/group
+
+# RUN useradd -U --create-home --shell /bin/bash hadoop
+# RUN echo hadoop:hadoop | chpasswd
+
+# copy the vim conf to hadoop user
+
+RUN [ -d "/home/developer/.vim" ] \
+        && cp -fr "/home/developer/.vim" "/home/hadoop/" \
+        || true
+
+RUN [ -d "/home/developer/.vim_runtime" ] \
+        && cp -fr "/home/developer/.vim_runtime" "/home/hadoop/" \
+        || true
+
+RUN [ -f "/home/developer/.vimrc" ] \
+        && cp -fr "/home/developer/.vimrc" "/home/hadoop/" \
+        || true
+
+RUN chown -R hadoop:hadoop /home/hadoop
+
+# Remove the developer user from the base image
+
+RUN userdel --force developer
+RUN [ -d "/home/developer" ] \
+        && rm -fr "/home/developer" \
+        || true
+
+#################
+# ssh management
+#################
+
+# uncomment this if you want to allow root user to ssh 
+# RUN sed -i 's/PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+# RUN echo 'root:toor' | chpasswd
+
+# SSH login fix. Otherwise user is kicked off after login
+RUN sed 's@session\s*required\s*pam_loginuid.so@session optional pam_loginuid.so@g' -i /etc/pam.d/sshd
+
+ENV NOTVISIBLE "in users profile"
+RUN echo "export VISIBLE=now" >> /etc/profile
+
+RUN su - hadoop --command "ssh-keygen -t rsa -P '' -f ~/.ssh/id_rsa"
+RUN su - hadoop --command "ssh-keygen -t dsa -P '' -f ~/.ssh/id_dsa"
+
+# to allow these users to connect to ssh 
+RUN echo 'hadoop:hadoop' | chpasswd
+
+RUN chown -R hadoop:hadoop /home/hadoop/.ssh
+
+##################
+# Hadoop software
+##################
+
+COPY tarballs/hadoop-${HADOOP_VERSION}.tar.gz /opt/
+
+RUN [ -f /opt/hadoop-${HADOOP_VERSION}.tar.gz ] \
+        && cd /opt \
+        && tar -xzvf hadoop-${HADOOP_VERSION}.tar.gz \
+        && ln -sf hadoop-${HADOOP_VERSION} hadoop \
+        && rm -f hadoop-${HADOOP_VERSION}.tar.gz \
+        && chown -R hadoop:hadoop /opt/hadoop*
+
+RUN mkdir -p $HADOOP_LOG_DIR \
+    && chown -R hadoop:hadoop $HADOOP_LOG_DIR 
+
+# conf
+
+RUN [ -f $HADOOP_HOME/etc/hadoop/hadoop-env.sh ] \
+    && echo "export JAVA_HOME=$JAVA_HOME" >> $HADOOP_HOME/etc/hadoop/hadoop-env.sh \
+    && echo "export HDFS_DATANODE_USER=hadoop" >> $HADOOP_HOME/etc/hadoop/hadoop-env.sh \
+    && echo "export HDFS_NAMENODE_USER=hadoop" >> $HADOOP_HOME/etc/hadoop/hadoop-env.sh \
+    && echo "export HADOOP_LOG_DIR=$HADOOP_LOG_DIR" >> $HADOOP_HOME/etc/hadoop/hadoop-env.sh \
+    && echo "export HDFS_SECONDARYNAMENODE_USER=hadoop" >> $HADOOP_HOME/etc/hadoop/hadoop-env.sh
+
+RUN [ -f $HADOOP_HOME/etc/hadoop/yarn-env.sh ] \
+    && echo "export YARN_RESOURCEMANAGER_USER=hadoop" >> $HADOOP_HOME/etc/hadoop/yarn-env.sh \
+    && echo "export YARN_NODEMANAGER_USER=hadoop" >> $HADOOP_HOME/etc/hadoop/yarn-env.sh
+
+COPY config/nn/* $HADOOP_HOME/etc/hadoop/
+RUN chown -R hadoop:hadoop $HADOOP_HOME/etc/hadoop
+
+# /etc/profile
+
+RUN [ -f /etc/profile ] \
+    && echo >> /etc/profile \
+    && echo "## Hadoop" >> /etc/profile \
+    && echo "export HADOOP_HOME=$HADOOP_HOME" >> /etc/profile \
+    && echo "export PATH=\"\$HADOOP_HOME/bin:\$HADOOP_HOME/sbin:\$HOME/bin:\$PATH\"" >> /etc/profile
+
+
+##################
+# Spark
+##################
+
+COPY tarballs/spark-${SPARK_VERSION}.tgz /opt/
+
+RUN [ -f /opt/spark-${SPARK_VERSION}.tgz ] \
+        && cd /opt \
+        && tar -xzvf spark-${SPARK_VERSION}.tgz \
+        && ln -sf spark-${SPARK_VERSION} spark \
+        && rm -f spark-${SPARK_VERSION}.tgz \
+        && chown -R hadoop:hadoop /opt/spark*
+
+RUN mkdir -p $SPARK_LOG_DIR \
+    && chown -R hadoop:hadoop $SPARK_LOG_DIR 
+
+# conf
+
+RUN [ -f /etc/profile ] \
+    && echo >> /etc/profile \
+    && echo "## Spark" >> /etc/profile \
+    && echo "export SPARK_HOME=$SPARK_HOME" >> /etc/profile \
+    && echo "export PATH=\"\$SPARK_HOME/bin:\$SPARK_HOME/sbin:\$PATH\"" >> /etc/profile
+
+
+##################
+# Scala
+##################
+
+# TODO
+
+
+##################
+# HUE
+
+# https://www.dropbox.com/s/auwpqygqgdvu1wj/hue-4.1.0.tgz
+# ADD hue-4.1.0.tgz /
+
+# RUN mv -f /hue-4.1.0 /opt/hue
+# WORKDIR /opt/hue
+# RUN make apps
+
+# ADD hue.ini /opt/hue/desktop/conf
+# RUN chown -R hue:hue /opt/hue
+# WORKDIR /
+####################################################################################
+
+
+##################
+# admin scripts
+##################
+
+RUN su - hadoop --command "mkdir -p ~/bin"
+COPY scripts/start-hadoop.sh /home/hadoop/bin/start-hadoop.sh
+COPY scripts/stop-hadoop.sh /home/hadoop/bin/stop-hadoop.sh
+COPY scripts/update-ssh-auth-keys.sh /home/hadoop/bin/update-ssh-auth-keys.sh
+
+RUN cp /etc/skel/.bashrc /home/hadoop/.bashrc \
+        && echo " " >> /home/hadoop/.bashrc \
+        && echo "[ -f \"/etc/profile\" ] && . /etc/profile" >> /home/hadoop/.bashrc
+
+RUN chown -R hadoop:hadoop /home/hadoop \
+    && su - hadoop -c "chmod +x ~/bin/*"
+
+#######################
+# Ports
+#######################
+
+EXPOSE \
+    10020 \
+    10033 \
+    13562 \
+    19888 \
+    33911 \
+    8040 \
+    8042 \
+    9864 \
+    9866 \
+    9867 \
+    9868 \
+    9870 \
+    43427 \
+    44556 \
+    51348 \
+    8030 \
+    8031 \
+    8032 \
+    8033 \
+    8088 \
+    9000
+
+EXPOSE 22
+
+# We don't want hadoop to be started automatically
+CMD ["sh","-c","/etc/init.d/ssh restart ; /bin/bash"]
+
